@@ -4,7 +4,14 @@ Documentation=https://github.com/mintoriakamoto/cmp100-unlock
 After=systemd-modules-load.service systemd-udev-settle.service systemd-udevd.service
 Wants=systemd-udev-settle.service
 # Must own the GPUs before anything opens them.
-Before=display-manager.service graphical.target nvidia-persistenced.service docker.service containerd.service ollama.service
+# - display-manager/graphical: DRM clients.
+# - user@1000.service: the systemd *user* manager that starts an inference stack
+#   (llama-server, reflex, embed). Ordered here, the unlock always wins the race
+#   for /dev/nvidia* instead of failing with "device nodes are open" on every
+#   reboot. If your stack runs as another uid, change 1000 to that uid, or list
+#   each unit in CMP100_STOP_SERVICES in /etc/cmp100-unlock.conf.
+# - systemd-user-sessions: no login session may start the stack in between.
+Before=display-manager.service graphical.target nvidia-persistenced.service docker.service containerd.service ollama.service systemd-user-sessions.service user@1000.service
 ConditionKernelCommandLine=!cmp100.skip
 
 [Service]

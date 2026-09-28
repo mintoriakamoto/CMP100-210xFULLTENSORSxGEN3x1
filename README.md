@@ -152,6 +152,7 @@ The upstream CmpUnlocker project validated Debian 13 and Proxmox passthrough.
 ## Commands
 
     sudo ./install.sh [--no-enable|--run]   # --help for usage
+    sudo cmp100-verify               # read-only: is this host really unlocked, and if not why
     sudo cmp100-unlock status        # read-only: tensor reg, link speed, driver per card
     sudo systemctl start cmp100-unlock
     journalctl -u cmp100-unlock -b   # or /var/log/cmp100-unlock/run-*.log
@@ -161,6 +162,11 @@ The upstream CmpUnlocker project validated Debian 13 and Proxmox passthrough.
     cmp100-bench                     # HMMA latency / FP16 tensor throughput
     cmp100-pcie-bw                   # H2D / D2H copy bandwidth per card
     sudo ./uninstall.sh [--purge]
+
+Start with `cmp100-verify`. `cmp100-unlock status` reports what the cards say; `cmp100-verify`
+adds the environment around them, which is where the silent failures live - a driver-wide
+`RMPcieLinkSpeed` cap, a boot unit that lost the race for the GPUs, or a DRM client on a
+target card - and ends in a PASS/FAIL verdict.
 
 Config in `/etc/cmp100-unlock.conf`: `CMP100_BDFS` (explicit BDF list),
 `CMP100_PCIE=3|2|0` (Gen3 pre-POST clamp clear, signed-write Gen2, or Tensor only;
@@ -189,6 +195,12 @@ the riser (many x1 risers are Gen2-only), and BIOS slot speed settings. `--gen2`
 advertised cap but the link stays at 8 GT/s; `lspci -vv -s <bdf> | grep LnkSta` shows
 `8GT/s (strange)` and `cmp100-pcie-bw` shows ~0.8 GB/s.
 
+Cards locked **and** at Gen1 after a reboot : two independent causes, both silent - the
+boot unit lost the race for the GPUs (a systemd *user* stack holding `/dev/nvidia*`, or a
+DRM client on a non-target card), and/or a driver-wide `RMPcieLinkSpeed` dword is loaded.
+`sudo cmp100-verify` separates them, and `docs/TROUBLESHOOTING.md` has the full walkthrough
+including how to confirm the fixed `modprobe.d` file made it into the initramfs.
+
 `NVIDIA policy did not advertise Gen2` / stuck at Gen1 (Gen2 fallback) : your upstream port
 targets Gen1 (`lspci -vv -s <root> | grep LnkCtl2`). The script raises it automatically; if
 the BIOS has an explicit "PCIe Gen1" slot setting, change it there.
@@ -211,8 +223,9 @@ Card in a bad state after a failure: **reboot**. Do not poke sysfs bind/unbind b
     tools/build_payloads.py       derives the 5 payloads from stock firmware, hash-locked
     tools/cmp100-bench            HMMA latency / FP16 throughput via PTX JIT
     tools/cmp100-pcie-bw          H2D / D2H copy bandwidth per card via libcuda
+    tools/cmp100-verify           whole-host check: link, cap, boot unit, holders, verdict
     systemd/cmp100-unlock.service
-    modprobe.d/cmp100-unlock.conf blacklist nouveau + nvidia_drm, RMPcieLinkSpeed=0x1
+    modprobe.d/cmp100-unlock.conf blacklist nouveau + nvidia_drm; no RMPcieLinkSpeed dword
     tests/                        mocked full-flow tests (no hardware)
     docs/PREREQUISITES.md         every tested version, hash and hardware detail
     docs/RESULTS.md               boot journal and benchmark output
@@ -225,7 +238,7 @@ Card in a bad state after a failure: **reboot**. Do not poke sysfs bind/unbind b
 
 The signed-ACR technique, hook, payload builder and register map come from
 [Brazzo978/CmpUnlocker-100-210](https://github.com/Brazzo978/CmpUnlocker-100-210) (GPL-2.0).
-The Ubuntu 22.04 port work started in [mintoriakamoto/](https://github.com/mintoriakamoto/CMP100-210xFULLTENSORSxGEN3x1
+The Ubuntu 22.04 port work started in [mintoriakamoto/CMP100-210xFULLTENSORSxGEN3x1](https://github.com/mintoriakamoto/CMP100-210xFULLTENSORSxGEN3x1) and grew into this repo.
 This repo packages it as a single boot-time installer, adds `10de:1df4` support, the
 `noaccel` nouveau workaround for the unbind Oops, the upstream-port target-speed fix and
 the retrain retry loop that gets Gen2 on slots where the original script stops.

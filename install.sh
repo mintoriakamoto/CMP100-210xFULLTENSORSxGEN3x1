@@ -99,6 +99,7 @@ install -m 0644 "$LIB_DIR/src/gv100_nouveau_acr_hook.ko" "$LIB_DIR/"
 install -m 0755 "$ROOT/sbin/cmp100-unlock" /usr/local/sbin/cmp100-unlock
 install -m 0755 "$ROOT/tools/cmp100-bench" /usr/local/bin/cmp100-bench
 install -m 0755 "$ROOT/tools/cmp100-pcie-bw" /usr/local/bin/cmp100-pcie-bw
+install -m 0755 "$ROOT/tools/cmp100-verify" /usr/local/bin/cmp100-verify
 install -m 0644 "$ROOT/systemd/cmp100-unlock.service" /etc/systemd/system/
 install -m 0644 "$ROOT/modprobe.d/cmp100-unlock.conf" /etc/modprobe.d/cmp100-unlock.conf
 [[ -e $CONF ]] || install -m 0644 "$ROOT/cmp100-unlock.conf" "$CONF"
@@ -140,6 +141,7 @@ fi
 cat <<EOF
 
 Installed. Status (read-only):   sudo cmp100-unlock status
+Verify the whole host:           sudo cmp100-verify
 Apply now (GPUs must be idle):   sudo systemctl start cmp100-unlock; journalctl -u cmp100-unlock -b
 Benchmark tensor cores:          cmp100-bench
 PCIe bandwidth (Gen3 ~0.8 GB/s): cmp100-pcie-bw

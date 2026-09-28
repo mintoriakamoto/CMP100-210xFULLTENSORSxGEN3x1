@@ -1,0 +1,194 @@
+#!/usr/bin/env bash
+# cmp100-verify: one read-only command for "is this host actually unlocked at the
+# genuine link speed, and if not, why".
+#
+# `cmp100-unlock status` reports what the cards say. This adds the environment
+# around them, which is where the silent failures live: a driver-wide Gen1 cap, a
+# boot unit that lost the race for the GPUs, or a DRM client on a target card.
+#
+#   sudo cmp100-verify
+#
+# Exit 0 = every check passed, 1 = at least one FAIL, 2 = usage/root.
+set -Eeuo pipefail
+
+VERSION=1.1.1
+PCI_ROOT=/sys/bus/pci/devices
+FAILED=0
+WARNED=0
+
+if [[ ${1:-} == -h || ${1:-} == --help ]]; then sed -n '2,10p' "$0"; exit 0; fi
+[[ $(id -u) -eq 0 ]] || { echo 'run as root (BAR0 reads need it)' >&2; exit 2; }
+
+pass() { printf '  PASS  %s\n' "$*"; }
+fail() { printf '  FAIL  %s\n' "$*"; FAILED=$((FAILED + 1)); }
+warn() { printf '  WARN  %s\n' "$*"; WARNED=$((WARNED + 1)); }
+note() { printf '        %s\n' "$*"; }
+
+cleanup() { [[ -n ${TMP:-} ]] && rm -rf -- "$TMP"; }
+trap cleanup EXIT
+TMP=$(mktemp -d)
+
+echo "cmp100-verify $VERSION"
+NVRM=$(sed -n 's/.*Kernel Module  *\([0-9][0-9.]*\).*/\1/p' /proc/driver/nvidia/version 2>/dev/null | head -1)
+echo "kernel $(uname -r)  driver ${NVRM:-?}"
+echo
+
+# ---- 1. target cards -----------------------------------------------------------------
+echo '== target cards =='
+TARGETS=()
+for d in "$PCI_ROOT"/*; do
+    [[ -e $d/vendor ]] || continue
+    [[ $(<"$d/vendor") == 0x10de ]] || continue
+    case $(<"$d/device") in
+        0x1d84|0x1df4) TARGETS+=("${d##*/}"); pass "CMP 100-210 ${d##*/} ($(<"$d/device"))";;
+    esac
+done
+if (( ${#TARGETS[@]} == 0 )); then
+    fail 'no CMP 100-210 (10de:1d84 / 10de:1df4) on this machine'
+    echo; echo "VERDICT: FAIL ($FAILED failed)"; exit 1
+fi
+echo
+
+# ---- 2. driver-wide link-speed cap ---------------------------------------------------
+echo '== driver link policy =='
+DWORDS=$(grep -i '^RegistryDwords:' /proc/driver/nvidia/params 2>/dev/null || echo 'RegistryDwords: ""')
+note "$DWORDS"
+if grep -qi 'RMPcieLinkSpeed' <<<"$DWORDS"; then
+    fail 'a driver-wide link-speed cap is loaded: RMPcieLinkSpeed pins EVERY nvidia GPU on this host at Gen1'
+    note 'delete the RMPcieLinkSpeed dword from /etc/modprobe.d/, then: update-initramfs -u and reboot'
+    note '(the nvidia module loads from the initramfs, so editing the file alone changes nothing)'
+else
+    pass 'no RMPcieLinkSpeed cap in the loaded driver'
+fi
+echo
+
+# ---- 3. the boot unit ----------------------------------------------------------------
+echo '== boot unit =='
+UNIT_OK=0
+if systemctl list-unit-files cmp100-unlock.service >/dev/null 2>&1 && \
+   [[ -n $(systemctl list-unit-files cmp100-unlock.service 2>/dev/null) ]]; then
+    STATE=$(systemctl show cmp100-unlock.service -p ActiveState --value)
+    RESULT=$(systemctl show cmp100-unlock.service -p Result --value)
+    ENABLED=$(systemctl is-enabled cmp100-unlock.service 2>/dev/null || echo no)
+    note "ActiveState=$STATE Result=$RESULT enabled=$ENABLED"
+    if [[ $STATE == active && $RESULT == success ]]; then
+        UNIT_OK=1
+        pass 'unit ran to success this boot'
+    else
+        fail "unit is $STATE/$RESULT"
+        note 'why (last lines):'
+        journalctl -u cmp100-unlock.service -b --no-pager 2>/dev/null \
+            | grep -iE 'error|die|refus|open|fused|did not|marker' | tail -5 | sed 's/^/          /' || true
+        if systemctl show cmp100-unlock.service -p Before --value | grep -q 'user@1000'; then
+            note 'ordering includes user@1000.service (1.1.1+): a user inference stack cannot take the GPUs first'
+        else
+            note 'ordering does NOT include user@1000.service: upgrade to 1.1.1 or the user stack can win the race'
+        fi
+    fi
+else
+    warn 'cmp100-unlock.service is not installed'
+fi
+echo
+
+# ---- 4. who holds the devices, and do they own a target card? -------------------------
+echo '== device holders =='
+mine=0
+foreign=0
+shopt -s nullglob
+for node in /dev/nvidia* /dev/nvidia-caps/* /dev/dri/card* /dev/dri/renderD*; do
+    [[ -e $node ]] || continue
+    holders=$(fuser "$node" 2>/dev/null | tr -s ' ' || true)
+    [[ -n ${holders// /} ]] || continue
+    owner=''
+    case $node in
+        /dev/dri/*)
+            link=/sys/class/drm/$(basename "$node")/device
+            if [[ -e $link ]]; then
+                owner=$(basename "$(readlink -f "$link")")
+            fi
+            if [[ -n $owner ]]; then
+                hit=0
+                for t in "${TARGETS[@]}"; do [[ $t == "$owner" ]] && hit=1; done
+                if (( hit )); then note "$node held by[$holders] owner=$owner (TARGET)"; mine=$((mine + 1));
+                else note "$node held by[$holders] owner=$owner (not a target; harmless)"; foreign=$((foreign + 1)); fi
+            else
+                note "$node held by[$holders] owner=unresolved (treated as TARGET by the unlock tool)"; mine=$((mine + 1))
+            fi
+            ;;
+        *) note "$node held by[$holders] (nvidia device class; always the unlock tool's client)"; mine=$((mine + 1));;
+    esac
+done
+shopt -u nullglob
+if (( mine == 0 )); then
+    pass "no client holds a target card's devices (${foreign} non-target holder(s) ignored)"
+elif (( UNIT_OK )); then
+    note "$mine node(s) held on a target card by the serving stack: normal on a serving host,"
+    note 'and exactly why a *manual* run refuses. The boot unit runs before these start.'
+else
+    warn "$mine node(s) held on a target card: a manual run will refuse until those processes stop"
+fi
+echo
+
+# ---- 5. link state, endpoint and the port above it -----------------------------------
+echo '== link state =='
+for b in "${TARGETS[@]}"; do
+    d=$PCI_ROOT/$b
+    p=$(basename "$(dirname "$(readlink -f "$d")")")
+    cur=$(cat "$d/current_link_speed" 2>/dev/null || echo '?')
+    wid=$(cat "$d/current_link_width" 2>/dev/null || echo '?')
+    pcur=$(cat "$PCI_ROOT/$p/current_link_speed" 2>/dev/null || echo '?')
+    note "$b speed=$cur width=$wid (upstream $p $pcur)"
+    case $cur in
+        "8.0 GT/s"*) pass "$b trained Gen3";;
+        "5.0 GT/s"*) warn "$b trained Gen2 only (Gen1 was 2.5 GT/s); --gen2 host, or Gen3 did not hold";;
+        *)           fail "$b trained $cur: the link is at Gen1 (2.5 GT/s)";;
+    esac
+done
+echo '  info  nvidia-smi reports the driver re-clamped capability, not the link.'
+echo '        A card reading "gen 1" or "gen 2" in nvidia-smi can still be Gen3 on the wire.'
+echo
+
+# ---- 6. the cards' own verdict --------------------------------------------------------
+echo '== unlock state (cmp100-unlock status) =='
+if command -v cmp100-unlock >/dev/null 2>&1; then
+    # Capture once. `status` exits non-zero when a card is locked, and under
+    # `set -o pipefail` a `status | grep -q` pipeline then reports failure even
+    # when grep matched, so never test it through a pipe.
+    STATUS_OUT=$(cmp100-unlock status 2>&1 || true)
+    printf '%s\n' "$STATUS_OUT" | sed 's/^/        /'
+    if grep -q 'tensor=0x00000888' <<<"$STATUS_OUT"; then
+        pass 'at least one card reports tensor unlocked (0x888)'
+    else
+        fail 'no card reports tensor 0x888: the Tensor stage has not run'
+    fi
+    if grep -q 'mmio Gen1' <<<"$STATUS_OUT"; then
+        warn 'a card reports mmio Gen1: the Gen3 stage has not run since the last boot'
+    fi
+    if grep -q '\[locked\]' <<<"$STATUS_OUT"; then
+        warn 'a card still reads its tensor gate as locked'
+    fi
+else
+    warn 'cmp100-unlock not in PATH'
+fi
+echo
+
+# ---- 7. real bandwidth ----------------------------------------------------------------
+echo '== bandwidth =='
+if command -v cmp100-pcie-bw >/dev/null 2>&1; then
+    cmp100-pcie-bw 2>&1 | sed 's/^/        /' || true
+    echo '  info  Gen1 x1 ~0.20 GB/s, Gen2 x1 ~0.39 GB/s, Gen3 x1 ~0.81 GB/s (per direction)'
+else
+    warn 'cmp100-pcie-bw not in PATH'
+fi
+echo
+
+# ---- verdict --------------------------------------------------------------------------
+if (( FAILED )); then
+    echo "VERDICT: FAIL ($FAILED failed, $WARNED warning(s))"
+    exit 1
+fi
+if (( WARNED )); then
+    echo "VERDICT: PASS with $WARNED warning(s)"
+    exit 0
+fi
+echo 'VERDICT: PASS'

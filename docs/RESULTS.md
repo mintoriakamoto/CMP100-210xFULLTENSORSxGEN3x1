@@ -102,3 +102,55 @@ Second `systemctl start cmp100-unlock` on an unlocked machine:
 
 No unbind, no reset, no module load, exit 0, ~3 s (the time is nvidia-smi). "Unlocked" is
 judged on `LnkSta`, not on `nvidia-smi`, so the re-clamped cap does not trigger a re-run.
+
+## 1.1.1: a host that booted locked at Gen1, and what fixed it
+
+A two-card host that had been unlocking fine came up locked **and** at Gen1 after a reboot.
+Two independent causes, both silent:
+
+1. `cmp100-unlock.service` failed with `GPU/DRM device nodes are open`. Two different
+   holders, both fatal to the old check:
+   - the systemd **user** manager had already started the inference stack
+     (`llama-server`, reflex, embed) which holds `/dev/nvidia*`;
+   - `plymouthd` held `/dev/dri/card1`, which resolves to the **AMD** GPU at `0c:00.0` - a
+     card the tool never touches. The old check refused on any `/dev/dri/card*`.
+2. `/etc/modprobe.d/cmp100-unlock.conf` as shipped before 1.1.1 carried
+   `NVreg_RegistryDwords="RMPcieLinkSpeed=0x1"`. That is a *driver-wide* cap:
+   `/proc/driver/nvidia/params` read `RegistryDwords: "RMPcieLinkSpeed=0x1"` and both cards
+   stayed at 2.5 GT/s no matter what the clamp clear did.
+
+Before / after on that host - same cards, same flags, 256 MiB pinned copies:
+
+| reading | before (as found) | after | factor |
+|---|---|---|---|
+| tensor gate `0x409664` | `0x00000999` locked | `0x00000888` UNLOCKED | - |
+| sysfs link speed | 2.5 GT/s (Gen1) | 8.0 GT/s (Gen3) | 4x rate |
+| `cmp100-pcie-bw` H2D | 0.202 / 0.194 GB/s | 0.812 / 0.798 GB/s | 4.0x |
+| `cmp100-pcie-bw` D2H | 0.214 / 0.214 GB/s | 0.850 / 0.848 GB/s | 4.0x |
+| `RegistryDwords` | `"RMPcieLinkSpeed=0x1"` | `""` | - |
+| 9B Q4_K_M model load | 34.34 / 35.02 s | 7.69 s | 4.5x |
+
+Model load is where the link shows up in practice. 7.69 s for ~5.3 GB of weights is about
+85% of the 0.81 GB/s an x1 Gen3 lane can carry, so it is link-bound, not disk-bound. The
+same model took 14.04 s on the contended boot (both cards loading at once) and 7.69 s when
+loaded alone. Per-token rates did **not** move - prefill ~2200 tok/s, decode ~61-65 tok/s at
+ctx 196608 - because while serving, the weights and the KV cache are device-resident and the
+link carries nothing.
+
+Boot timing after the fix: unit `active (exited)`, `Result=success`, both cards `LnkSta Gen3`
+and tensor `0x00000888`, 24 s after boot, one reboot, no manual step.
+
+## Ceiling: what is left, and what is closed
+
+Measured on the same host with the unlock applied:
+
+| lever | reading | verdict |
+|---|---|---|
+| link gen | Gen3 8.0 GT/s achieved | **at the ceiling**: cleared `LnkCap2` advertises 2.5/5/8 GT/s only, so Gen4 is not reachable |
+| link width | x1; endpoint `LnkCap` says Width x1 | **closed**: comes from the IFR at flash offset 0x214 (non-volatile), and BAR0 `0x88084` (LnkCap) is not CPU-writable. Widening needs a VBIOS flash, which this project does not do |
+| SM clock | max 1380 MHz, idle 135 MHz, 24-30 W of a 250 W limit | **no headroom used**: already at the VBIOS max under load. A locked-1380 A/B measured no gain (prefill 2202-2299 tok/s, decode 61.0-65.5 tok/s either way) because the card reaches max clock on its own |
+| HBM clock | 810 MHz | at max |
+| tensor | 96.1 / 85.6 TFLOP/s FP16 (clk 1147 MHz) | unlocked; locked reference ~512 cycles per dependent HMMA |
+
+The cards are at their own firmware ceiling. The remaining physical levers are VBIOS-level
+(lane count, boost table) and out of scope here.

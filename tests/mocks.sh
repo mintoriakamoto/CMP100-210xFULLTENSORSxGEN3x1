@@ -10,7 +10,17 @@ systemctl() {
         *) : ;;
     esac
 }
-fuser() { return 1; }
+# Nobody holds a node unless MOCK_HELD_NODES lists its basename
+# (e.g. MOCK_HELD_NODES="card1 renderD128"); match on basename so a test can name
+# a node without knowing the sandbox path the harness rewrote it into.
+fuser() {
+    local arg n
+    for arg in "$@"; do
+        n=$(basename "$arg")
+        case " ${MOCK_HELD_NODES:-} " in *" $n "*) return 0 ;; esac
+    done
+    return 1
+}
 sleep() { :; }
 sync() { :; }
 timeout() { shift; "$@"; }

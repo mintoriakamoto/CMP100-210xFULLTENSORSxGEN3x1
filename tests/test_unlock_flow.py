@@ -265,6 +265,58 @@ class Flow(unittest.TestCase):
         self.assertEqual(x['rc'], 0, x['out'])
         self.assertNotIn('unbind', x['ev'])
 
+    def _held_drm_node(self, p, node_bdf, node='card1'):
+        """Create a DRM node in the sandbox owned by `node_bdf`, plus its globe."""
+        (p / 'dev/dri').mkdir(parents=True, exist_ok=True)
+        (p / 'dev/dri' / node).touch()
+        dev = p / 'sys/bus/pci/devices' / node_bdf
+        dev.mkdir(parents=True, exist_ok=True)
+        (dev / 'vendor').write_text('0x1002' if node_bdf.endswith('0c:00.0') else '0x10de')
+        cls = p / 'sys/class/drm' / node
+        cls.mkdir(parents=True, exist_ok=True)
+        (cls / 'device').symlink_to(p / 'sys/bus/pci/devices' / node_bdf)
+        return cls
+
+    def test_foreign_drm_holder_does_not_block_the_run(self):
+        """A DRM client on a NON-target GPU (boot splash, desktop) must not stop us.
+
+        Measured on zues: plymouthd holds /dev/dri/card1, which maps to the AMD GPU
+        at 0c:00.0, so the boot unit failed every reboot and the cards stayed Gen1.
+        """
+        def pre(p, put):
+            self._held_drm_node(p, '0000:0c:00.0')
+        x = self.run_script(pre=pre, env_extra={'MOCK_HELD_NODES': 'card1'})
+        self.assertEqual(x['rc'], 0, x['out'])
+        self.assertIn('ignoring DRM holders on non-target devices', x['out'])
+        self.assertEqual(x['regs']['0000:01:00.0'], '0x00000888')
+
+    def test_target_drm_holder_still_blocks(self):
+        """A DRM client on the target card is fatal and must still stop the run."""
+        def pre(p, put):
+            self._held_drm_node(p, '0000:01:00.0')
+        x = self.run_script(pre=pre, env_extra={'MOCK_HELD_NODES': 'card1'})
+        self.assertNotEqual(x['rc'], 0)
+        self.assertIn('on a target card is open', x['out'])
+        self.assertNotIn('unbind', x['ev'])
+
+    def test_unresolvable_drm_holder_blocks(self):
+        """If the node cannot be mapped to a card, stay conservative and refuse."""
+        def pre(p, put):
+            (p / 'dev/dri').mkdir(parents=True, exist_ok=True)
+            (p / 'dev/dri/card7').touch()
+        x = self.run_script(pre=pre, env_extra={'MOCK_HELD_NODES': 'card7'})
+        self.assertNotEqual(x['rc'], 0)
+        self.assertIn('on a target card is open', x['out'])
+
+    def test_nvidia_node_holder_blocks_even_when_targets_are_scoped(self):
+        """A CUDA client is always our client, regardless of CMP100_BDFS scoping."""
+        def pre(p, put):
+            (p / 'dev').mkdir(parents=True, exist_ok=True)
+            (p / 'dev/nvidia0').touch()
+        x = self.run_script(pre=pre, env_extra={'MOCK_HELD_NODES': 'nvidia0'})
+        self.assertNotEqual(x['rc'], 0)
+        self.assertIn('on a target card is open', x['out'])
+
 
 if __name__ == '__main__':
     unittest.main(verbosity=2)

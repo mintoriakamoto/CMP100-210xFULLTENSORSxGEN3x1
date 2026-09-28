@@ -12,7 +12,7 @@
 #   cmp100-unlock --no-pcie  Tensor only (--no-gen2 is an alias)
 set -Eeuo pipefail
 
-VERSION=1.1.0
+VERSION=1.1.1
 CONF=${CMP100_CONF:-/etc/cmp100-unlock.conf}
 STATE_DIR=${CMP100_STATE_DIR:-/var/lib/cmp100-unlock}
 LIB_DIR=${CMP100_LIB_DIR:-/usr/lib/cmp100-unlock}
@@ -244,18 +244,84 @@ acr_write() { # bdf payload label reg expected
 }
 
 # ---- preflight ----
-assert_quiescent() {
-    local unit status
-    for unit in display-manager.service gdm.service gdm3.service lightdm.service sddm.service switcheroo-control.service; do
-        status=$(systemctl show "$unit" --property=ActiveState --value 2>/dev/null || echo inactive)
-        [[ $status == inactive || $status == failed ]] || die "$unit is $status; a DRM client on the GPU during nouveau teardown crashes the kernel. Stop it (or run at boot before it starts)."
+# 00000000:01:00.0 -> 0000:01:00.0
+norm_bdf() {
+    local b=${1,,}
+    if [[ $b =~ ^[0-9a-f]{8}:([0-9a-f]{2}):([0-9a-f]{2})\.([0-9])$ ]]; then
+        b="0000:${BASH_REMATCH[1]}:${BASH_REMATCH[2]}.${BASH_REMATCH[3]}"
+    fi
+    printf '%s' "$b"
+}
+# PCI BDF that owns a DRM node, or empty when it cannot be resolved.
+drm_node_bdf() {
+    local link=/sys/class/drm/$1/device
+    [[ -e $link ]] || return 0
+    norm_bdf "$(basename "$(readlink -f "$link")")"
+}
+is_target() {
+    local bdf
+    for bdf in "${TARGETS[@]}"; do [[ $bdf == "$1" ]] && return 0; done
+    return 1
+}
+# True when a target card has its own DRM node, i.e. nvidia_drm is attached to it.
+target_has_drm() {
+    local bdf node
+    for bdf in "${TARGETS[@]}"; do
+        for node in /sys/class/drm/card*/; do
+            [[ $(drm_node_bdf "$(basename "$node")") == "$bdf" ]] && return 0
+        done
     done
+    return 1
+}
+assert_quiescent() {
+    local unit status node bdf
+    local -a nodes=() foreign=() blocked=()
+
+    # A display manager can only pin a target card when nvidia_drm has given that
+    # card a DRM node. With nvidia_drm blacklisted (this tool's own configuration)
+    # and the desktop on another GPU, a running DM is not a target-card client.
+    if target_has_drm; then
+        for unit in display-manager.service gdm.service gdm3.service lightdm.service sddm.service switcheroo-control.service; do
+            status=$(systemctl show "$unit" --property=ActiveState --value 2>/dev/null || echo inactive)
+            [[ $status == inactive || $status == failed ]] || die "$unit is $status; a DRM client on the GPU during nouveau teardown crashes the kernel. Stop it (or run at boot before it starts)."
+        done
+    fi
+
     shopt -s nullglob
-    local -a nodes=(/dev/dri/card* /dev/dri/renderD* /dev/nvidia* /dev/nvidia-caps/*)
+    nodes=(/dev/dri/card* /dev/dri/renderD* /dev/nvidia* /dev/nvidia-caps/*)
     shopt -u nullglob
-    if (( ${#nodes[@]} )) && fuser "${nodes[@]}" >/dev/null 2>&1; then
-        fuser -v "${nodes[@]}" 2>&1 | head -20 || true
-        die 'GPU/DRM device nodes are open; stop those processes first'
+    (( ${#nodes[@]} )) || return 0
+
+    for node in "${nodes[@]}"; do
+        fuser -s "$node" >/dev/null 2>&1 || continue
+        case $node in
+            /dev/dri/*)
+                # Only a holder of a TARGET card's DRM node can break the nouveau
+                # handoff. An unrelated GPU (or the boot splash drawn on it) is not
+                # our client and must not block the run: on a mixed host this is the
+                # difference between booting unlocked and never unlocking at all.
+                # A node we cannot map to a card stays conservative: refusing is
+                # cheap, a kernel crash during nouveau teardown is not.
+                bdf=$(drm_node_bdf "$(basename "$node")")
+                if [[ -n $bdf ]] && ! is_target "$bdf"; then
+                    foreign+=("$node")
+                else
+                    blocked+=("$node")
+                fi
+                ;;
+            *)
+                # /dev/nvidia* and /dev/nvidia-caps/* are this tool's own device class.
+                blocked+=("$node")
+                ;;
+        esac
+    done
+
+    if (( ${#blocked[@]} )); then
+        fuser -v "${blocked[@]}" 2>&1 | head -20 || true
+        die 'a GPU/DRM device node on a target card is open; stop those processes first'
+    fi
+    if (( ${#foreign[@]} )); then
+        say "note: ignoring DRM holders on non-target devices (${foreign[*]})"
     fi
 }
 assert_serialized() {
