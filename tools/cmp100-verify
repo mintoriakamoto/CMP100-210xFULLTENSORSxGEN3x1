@@ -74,6 +74,9 @@ if systemctl list-unit-files cmp100-unlock.service >/dev/null 2>&1 && \
     if [[ $STATE == active && $RESULT == success ]]; then
         UNIT_OK=1
         pass 'unit ran to success this boot'
+    elif grep -qw 'cmp100.skip' /proc/cmdline; then
+        warn "unit skipped: cmp100.skip is on the kernel cmdline"
+        note 'remove cmp100.skip from the boot parameters to let the unit run'
     else
         fail "unit is $STATE/$RESULT"
         note 'why (last lines):'
