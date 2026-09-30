@@ -92,8 +92,8 @@ def build_ucode_write(stock: bytes, value: int, target: int) -> bytes:
         0x8CB8: 0x00002DF0,
         0x8CC4: 0x00000176,
     }
-    for offset, value in initial_words.items():
-        put_u32(out, offset, value)
+    for off, val in initial_words.items():
+        put_u32(out, off, val)
 
     # Restore the verifier return and live LSB, clear depmap_count, compensate
     # the exact stack use and rejoin the signed parser. This chain returned rc=0.
@@ -118,8 +118,8 @@ def build_ucode_write(stock: bytes, value: int, target: int) -> bytes:
         0x8D00: 0xFFFFFFB4,
         0x8D04: 0x000008E6,
     }
-    for offset, value in restore_words.items():
-        put_u32(out, offset, value)
+    for off, val in restore_words.items():
+        put_u32(out, off, val)
     return bytes(out)
 
 

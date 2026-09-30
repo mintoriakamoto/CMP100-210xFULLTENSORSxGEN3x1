@@ -1,5 +1,5 @@
 [Unit]
-Description=Volatile Tensor + PCIe Gen2 unlock for NVIDIA CMP 100-210
+Description=Volatile Tensor + PCIe Gen3 unlock for NVIDIA CMP 100-210
 Documentation=https://github.com/mintoriakamoto/cmp100-unlock
 After=systemd-modules-load.service systemd-udev-settle.service systemd-udevd.service
 Wants=systemd-udev-settle.service
