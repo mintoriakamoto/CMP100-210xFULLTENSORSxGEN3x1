@@ -194,6 +194,7 @@ class Flow(unittest.TestCase):
         self.assertEqual(x['rc'], 0, x['out'])
         self.assertEqual(x['ev'].count('insmod '), 2)
         self.assertNotIn('retrain', x['out'])
+        self.assertNotIn('/reset', x['ev'])
 
     def test_marker_from_other_boot_blocks_until_force(self):
         def pre(p, put):
