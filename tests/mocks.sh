@@ -118,6 +118,17 @@ nvidia-smi() {
         fi
     done
 }
+cmp100-memclk() { # apply|reset|read <bdf> [offset]
+    ev "cmp100-memclk $*"
+    case $1 in
+        apply)
+            [[ -n ${MOCK_HBM_FAIL:-} ]] && return 1
+            echo "offset=138 mem=877" ;;
+        reset) echo "offset=0" ;;
+        read)  echo "offset=0 mem=810" ;;
+    esac
+    return 0
+}
 io_write() {
     local value=$1 path=$2 drv sha c
     ev "write $value ${path#"$SANDBOX"}"

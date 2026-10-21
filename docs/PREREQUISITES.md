@@ -95,6 +95,7 @@ uses it during the run.
 - `/var/lib/cmp100-unlock/stock/` snapshot of the three firmware files, `manifest.env` (0600) with all hashes + hook kernel version
 - `/usr/lib/cmp100-unlock/` payloads, `gv100_nouveau_acr_hook.ko`, `src/` (rebuilt on `install.sh` after a kernel upgrade)
 - `/usr/local/sbin/cmp100-unlock`, `/usr/local/bin/cmp100-bench`, `/usr/local/bin/cmp100-pcie-bw`
+- `/usr/local/bin/cmp100-memclk` **only if** `libnvidia-ml.so.1` is present at install time (it ships with the proprietary driver). This is the optional HBM memory-clock helper for `CMP100_HBM=877`; it links against the driver's NVML directly, so no `-dev` headers package is needed. If NVML is absent the installer logs a note and skips it, and the `CMP100_HBM` lever simply stays unavailable.
 - `/etc/systemd/system/cmp100-unlock.service` (enabled unless `--no-enable`)
 - `/etc/modprobe.d/cmp100-unlock.conf`: blacklist `nouveau` and `nvidia_drm`, `options nvidia NVreg_RegistryDwords="RMPcieLinkSpeed=0x1"`
 - `/etc/cmp100-unlock.conf` (only if absent)
@@ -133,5 +134,6 @@ GB/s H2D / D2H, Gen2 0.386 / 0.427, Gen3 0.806 / 0.845 (card 1) and 0.794 / 0.84
 - PCIe Gen4: **no**. With the clamp cleared `LnkCap2` advertises 2.5/5/8 GT/s only; GV100 is PCIe 3.0 silicon.
 - x16: **no**. The lane count comes from the IFR at flash offset 0x214, non-volatile; changing it means flashing, which this project does not do.
 - After a Gen3 run `nvidia-smi` reports `pcie.link.gen.current` 2 and `lspci` says `8GT/s (strange)`: the driver re-clamps the advertised cap but not the live link. Use `lspci` LnkSta, sysfs `current_link_speed` or `cmp100-pcie-bw` for the truth.
+- HBM memory clock (`CMP100_HBM=877`): optional, off by default, and **not yet validated on these cards.** The +138 NVML VF offset -> 877 MHz path is reported by upstream on `10de:1d84` (see RESULTS.md); ours are `10de:1df4` and unmeasured. It uses a supported NVML API (`nvmlDeviceSetMemClkVfOffset`), so it is reversible and resets on power loss, and a failure never disturbs the Tensor/PCIe unlock. Needs `cmp100-memclk` (built only when NVML is present).
 - The signed-ACR payloads only exist for the firmware revision above. A `linux-firmware` update that changes those three files stops the installer until the builder is re-derived.
 - Not tested: Proxmox passthrough (upstream did), Secure Boot with a MOK-signed hook, drivers other than 550.163.01, `10de:1d84`.
