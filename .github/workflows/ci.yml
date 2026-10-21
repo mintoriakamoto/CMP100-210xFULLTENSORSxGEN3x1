@@ -12,9 +12,9 @@ jobs:
       - name: Install lint tools
         run: pip install shellcheck-py pyflakes
       - name: Syntax
-        run: bash -n install.sh uninstall.sh sbin/cmp100-unlock tests/mocks.sh
+        run: bash -n install.sh uninstall.sh sbin/cmp100-unlock tests/mocks.sh tools/cmp100-verify
       - name: shellcheck
-        run: shellcheck -S warning install.sh uninstall.sh sbin/cmp100-unlock tests/mocks.sh
+        run: shellcheck -S warning install.sh uninstall.sh sbin/cmp100-unlock tests/mocks.sh tools/cmp100-verify
       - name: pyflakes
         run: pyflakes tools/build_payloads.py tools/cmp100-bench tools/cmp100-pcie-bw tests/test_unlock_flow.py
       - name: Unit tests (mocked hardware)

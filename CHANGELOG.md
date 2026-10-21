@@ -1,5 +1,31 @@
 # Changelog
 
+## 1.1.1
+
+Two independent faults that both leave the link at Gen1 after a reboot. Found on a
+live two-card host that had been unlocked successfully before it rebooted.
+
+- **Removed `RMPcieLinkSpeed=0x1` from the shipped `modprobe.d` drop-in.** It is a
+  driver-wide cap, not a per-card one: with it loaded, `/proc/driver/nvidia/params`
+  shows `RegistryDwords: "RMPcieLinkSpeed=0x1"` and every nvidia GPU on the host is
+  pinned at 2.5 GT/s, CMP or not. The Gen3 path needs no registry dword.
+- **The boot unit now wins the race for the GPUs.** `Before=` gained
+  `systemd-user-sessions.service` and `user@1000.service`, so the systemd *user*
+  manager that starts an inference stack (llama-server, reflex, embed) cannot open
+  `/dev/nvidia*` first. Before this, the unit died with "GPU/DRM device nodes are
+  open" on every boot and the cards came up locked and at Gen1.
+- **`assert_quiescent` no longer refuses on a non-target DRM node.** It resolved
+  every `/dev/dri/card*` to its PCI BDF and only blocks when the holder owns a
+  *target* card. On a mixed host the boot splash (`plymouthd`) holds the desktop
+  GPU's node, which is not our client; that alone made boot-time unlock impossible.
+  An unresolvable node still refuses, and `/dev/nvidia*` holders always block.
+- The display-manager check now only applies when a target card actually has a DRM
+  node (i.e. `nvidia_drm` is attached to it).
+- Measured on the regression host: H2D 0.202/0.194 GB/s (Gen1) before, tensor
+  `0x00000999`; after the fix the link trains Gen3 and tensor reads `0x00000888`.
+- 22 mocked tests (4 new: foreign DRM holder, target DRM holder, unresolvable node,
+  nvidia node).
+
 ## 1.1.0
 
 - PCIe Gen3 x1 is the default. Pre-POST clear of the CYA speed clamp in

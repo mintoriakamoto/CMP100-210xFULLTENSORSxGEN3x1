@@ -99,6 +99,7 @@ install -m 0644 "$LIB_DIR/src/gv100_nouveau_acr_hook.ko" "$LIB_DIR/"
 install -m 0755 "$ROOT/sbin/cmp100-unlock" /usr/local/sbin/cmp100-unlock
 install -m 0755 "$ROOT/tools/cmp100-bench" /usr/local/bin/cmp100-bench
 install -m 0755 "$ROOT/tools/cmp100-pcie-bw" /usr/local/bin/cmp100-pcie-bw
+install -m 0755 "$ROOT/tools/cmp100-verify" /usr/local/bin/cmp100-verify
 # Optional HBM memory-clock helper (CMP100_HBM=877). Links against the driver's
 # libnvidia-ml.so.1 directly, so it needs no -dev package; skipped if the NVIDIA
 # runtime library is absent or the compile fails.
@@ -155,6 +156,7 @@ fi
 cat <<EOF
 
 Installed. Status (read-only):   sudo cmp100-unlock status
+Verify the whole host:           sudo cmp100-verify
 Apply now (GPUs must be idle):   sudo systemctl start cmp100-unlock; journalctl -u cmp100-unlock -b
 Benchmark tensor cores:          cmp100-bench
 PCIe bandwidth (Gen3 ~0.8 GB/s): cmp100-pcie-bw
