@@ -265,6 +265,41 @@ class Flow(unittest.TestCase):
         self.assertEqual(x['rc'], 0, x['out'])
         self.assertNotIn('unbind', x['ev'])
 
+    def test_hbm_off_by_default(self):
+        # The HBM stage is opt-in: a plain run never touches the mem-clock tool.
+        x = self.run_script()
+        self.assertEqual(x['rc'], 0, x['out'])
+        self.assertNotIn('cmp100-memclk', x['ev'])
+        self.assertNotIn('HBM', x['out'])
+
+    def test_hbm_enabled_applies_offset(self):
+        # CMP100_HBM=877 runs the stage last, on each card now back on nvidia.
+        x = self.run_script(env_extra={'CMP100_HBM': '877'})
+        self.assertEqual(x['rc'], 0, x['out'])
+        self.assertEqual(x['regs']['0000:01:00.0'], '0x00000888')
+        self.assertIn('cmp100-memclk apply 0000:01:00.0', x['ev'])
+        self.assertIn('cmp100-memclk apply 0000:05:00.0', x['ev'])
+        self.assertEqual(x['out'].count('HBM 877 MHz PASS'), 2)
+        # HBM runs only after both cards are back on nvidia (end of the flow).
+        self.assertLess(x['ev'].index('write 0000:05:00.0 /sys/bus/pci/drivers/nvidia/bind'),
+                        x['ev'].index('cmp100-memclk apply 0000:01:00.0'))
+
+    def test_hbm_failure_is_nonfatal(self):
+        # A failed offset resets and warns, but the Tensor/PCIe unlock stands.
+        x = self.run_script(env_extra={'CMP100_HBM': '877', 'MOCK_HBM_FAIL': '1'})
+        self.assertEqual(x['rc'], 0, x['out'])
+        self.assertEqual(x['regs']['0000:01:00.0'], '0x00000888')
+        self.assertEqual(x['regs']['0000:05:00.0'], '0x00000888')
+        self.assertIn('cmp100-memclk reset 0000:01:00.0', x['ev'])
+        self.assertIn('HBM stage failed', x['out'])
+        self.assertNotIn('HBM 877 MHz PASS', x['out'])
+
+    def test_hbm_bad_value_warns_and_skips(self):
+        x = self.run_script(env_extra={'CMP100_HBM': '999'})
+        self.assertEqual(x['rc'], 0, x['out'])
+        self.assertNotIn('cmp100-memclk', x['ev'])
+        self.assertIn('unsupported', x['out'])
+
 
 if __name__ == '__main__':
     unittest.main(verbosity=2)

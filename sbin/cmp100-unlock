@@ -58,6 +58,8 @@ CMP100_PCIE=${CMP100_PCIE-3}          # 3 = Gen3 (pre-POST clamp clear), 2 = Gen
 [[ ${CMP100_GEN2-} == 0 ]] && CMP100_PCIE=0   # legacy config knob
 CMP100_STOP_SERVICES=${CMP100_STOP_SERVICES-}
 CMP100_RETRAIN_ATTEMPTS=${CMP100_RETRAIN_ATTEMPTS-3}
+CMP100_HBM=${CMP100_HBM-0}             # 877 = apply the HBM memory-clock lever, 0 = off (default)
+MEMCLK_TOOL=${CMP100_MEMCLK_TOOL:-cmp100-memclk}
 
 MODE=run
 FORCE=0
@@ -581,6 +583,29 @@ gen2_one() {
     die "$bdf did not reach Gen2 after $CMP100_RETRAIN_ATTEMPTS attempts (Tensor unlock is still applied)"
 }
 
+# ---- stage 3: HBM memory clock (optional, opt-in) ----
+# Volatile NVML memory-clock VF offset of +138 -> 877 MHz (stock 810), ~+8%
+# device bandwidth. Supported NVML API only (no raw FBPA PLL reprogram), so it
+# is reversible and resets on power loss like every other lever. Runs last, with
+# the card back on nvidia (NVML needs the driver bound). Opt-in via CMP100_HBM,
+# and never fatal to the already-applied Tensor/PCIe unlock: cmp100-memclk rolls
+# its own offset back on failure, and we reset again defensively.
+# Validated on 10de:1d84 by Brazzo978/CmpUnlocker-100-210 and duggasco/CMP100-210.
+hbm_one() {
+    local bdf=$1
+    command -v "$MEMCLK_TOOL" >/dev/null 2>&1 ||
+        { warn "$bdf: CMP100_HBM set but $MEMCLK_TOOL not installed (rerun install.sh with libnvidia-ml present); skipping HBM stage"; return 0; }
+    [[ $(driver_of "$bdf") == nvidia ]] ||
+        { warn "$bdf: not bound to nvidia after unlock; skipping HBM stage"; return 0; }
+    say "$bdf: HBM stage (NVML +138 offset -> 877 MHz)"
+    if "$MEMCLK_TOOL" apply "$bdf"; then
+        say "$bdf: HBM 877 MHz PASS"
+    else
+        "$MEMCLK_TOOL" reset "$bdf" >/dev/null 2>&1 || true
+        warn "$bdf: HBM stage failed (offset reset); Tensor/PCIe unlock is unaffected"
+    fi
+}
+
 # Order matters: the Gen3 clamp clear only sticks pre-POST (before any driver
 # runs devinit), so it goes first; Tensor needs a driver (nouveau) bound after.
 if (( CMP100_PCIE >= 3 )); then
@@ -598,6 +623,12 @@ elif (( CMP100_PCIE >= 3 )); then
             gen2_one "$bdf"
         fi
     done
+fi
+
+if [[ $CMP100_HBM == 877 ]]; then
+    for bdf in "${TARGETS[@]}"; do hbm_one "$bdf"; done
+elif [[ -n $CMP100_HBM && $CMP100_HBM != 0 ]]; then
+    warn "CMP100_HBM=$CMP100_HBM unsupported; only 877 (enable) or 0 (off) are recognized"
 fi
 
 say 'all targets unlocked:'

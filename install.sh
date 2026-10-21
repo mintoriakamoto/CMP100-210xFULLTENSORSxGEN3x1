@@ -99,6 +99,21 @@ install -m 0644 "$LIB_DIR/src/gv100_nouveau_acr_hook.ko" "$LIB_DIR/"
 install -m 0755 "$ROOT/sbin/cmp100-unlock" /usr/local/sbin/cmp100-unlock
 install -m 0755 "$ROOT/tools/cmp100-bench" /usr/local/bin/cmp100-bench
 install -m 0755 "$ROOT/tools/cmp100-pcie-bw" /usr/local/bin/cmp100-pcie-bw
+# Optional HBM memory-clock helper (CMP100_HBM=877). Links against the driver's
+# libnvidia-ml.so.1 directly, so it needs no -dev package; skipped if the NVIDIA
+# runtime library is absent or the compile fails.
+nvml_link=()
+for d in /usr/lib/x86_64-linux-gnu /usr/lib64 /usr/lib /lib/x86_64-linux-gnu; do
+    if [[ -e $d/libnvidia-ml.so ]]; then nvml_link=(-lnvidia-ml); break
+    elif [[ -e $d/libnvidia-ml.so.1 ]]; then nvml_link=(-l:libnvidia-ml.so.1); break; fi
+done
+if (( ${#nvml_link[@]} )) && \
+   ${CC:-gcc} -O2 -std=c11 -Wall -Wextra -o "$TMP/cmp100-memclk" "$ROOT/tools/cmp100-memclk.c" "${nvml_link[@]}" 2>/dev/null; then
+    install -m 0755 "$TMP/cmp100-memclk" /usr/local/bin/cmp100-memclk
+    log 'built cmp100-memclk (optional HBM 877 MHz lever; enable with CMP100_HBM=877)'
+else
+    log 'note: cmp100-memclk not built (libnvidia-ml missing); the optional CMP100_HBM lever is unavailable'
+fi
 install -m 0644 "$ROOT/systemd/cmp100-unlock.service" /etc/systemd/system/
 install -m 0644 "$ROOT/modprobe.d/cmp100-unlock.conf" /etc/modprobe.d/cmp100-unlock.conf
 [[ -e $CONF ]] || install -m 0644 "$ROOT/cmp100-unlock.conf" "$CONF"
