@@ -108,6 +108,18 @@ Stages, in order:
    port's target link speed if the BIOS pinned it at Gen1, correct the XP rate field
    at `0x8c040`, pulse CHANGE_SPEED, verify 5 GT/s. Retries the retrain cycle up to
    3 times; some slots only advertise Gen2 after a driver rebind.
+3. **HBM memory clock**, opt-in via `CMP100_HBM=877`, off by default. After the
+   cards are back on `nvidia`, apply a volatile NVML memory-clock VF offset of
+   `+138` per card (stock 810 MHz -> 877 MHz, ~+8% device bandwidth). This is a
+   supported NVML API call (`nvmlDeviceSetMemClkVfOffset`), not a raw FBPA PLL
+   reprogram, so it is reversible and resets on power loss like every other lever
+   here; the helper reads the offset back and rolls it back on any mismatch. A
+   failure never touches the already-applied Tensor/PCIe unlock. Needs the small
+   `cmp100-memclk` helper, which `install.sh` builds against the driver's
+   `libnvidia-ml.so.1` when present. The `+138`/877 MHz pair is the path reported
+   on `10de:1d84` by [Brazzo978/CmpUnlocker-100-210](https://github.com/Brazzo978/CmpUnlocker-100-210)
+   and [duggasco/CMP100-210](https://github.com/duggasco/CMP100-210); it is **not
+   yet validated on our own hardware**, which is why it is off by default.
 
 After a Gen3 run the NVIDIA driver re-clamps LnkCap, so `lspci` prints
 `LnkSta: Speed 8GT/s (strange)` and `nvidia-smi` reports `pcie.link.gen.current` 2
@@ -161,6 +173,8 @@ The upstream CmpUnlocker project validated Debian 13 and Proxmox passthrough.
     sudo cmp100-unlock --no-pcie     # tensor only (--no-gen2 is an alias)
     cmp100-bench                     # HMMA latency / FP16 tensor throughput
     cmp100-pcie-bw                   # H2D / D2H copy bandwidth per card
+    sudo CMP100_HBM=877 cmp100-unlock  # also apply the optional +138 HBM offset (810 -> 877 MHz)
+    cmp100-memclk read 0000:01:00.0  # current HBM VF offset and mem clock (optional helper)
     sudo ./uninstall.sh [--purge]
 
 Start with `cmp100-verify`. `cmp100-unlock status` reports what the cards say; `cmp100-verify`
@@ -171,7 +185,9 @@ target card - and ends in a PASS/FAIL verdict.
 Config in `/etc/cmp100-unlock.conf`: `CMP100_BDFS` (explicit BDF list),
 `CMP100_PCIE=3|2|0` (Gen3 pre-POST clamp clear, signed-write Gen2, or Tensor only;
 default 3; the pre-1.1 `CMP100_GEN2=0` is still honoured as `CMP100_PCIE=0`),
-`CMP100_STOP_SERVICES` (services to stop first), `CMP100_RETRAIN_ATTEMPTS`.
+`CMP100_STOP_SERVICES` (services to stop first), `CMP100_RETRAIN_ATTEMPTS`,
+`CMP100_HBM=877|0` (optional HBM memory-clock lever, +138 VF offset -> 877 MHz;
+off by default, reversible, never fatal to the Tensor/PCIe unlock).
 
 ## Troubleshooting
 

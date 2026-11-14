@@ -3,7 +3,7 @@
 set -Eeuo pipefail
 [[ $EUID -eq 0 ]] || { echo 'run as root' >&2; exit 1; }
 systemctl disable --now cmp100-unlock.service 2>/dev/null || true
-rm -f /etc/systemd/system/cmp100-unlock.service /usr/local/sbin/cmp100-unlock /usr/local/bin/cmp100-bench /usr/local/bin/cmp100-pcie-bw /etc/modprobe.d/cmp100-unlock.conf
+rm -f /etc/systemd/system/cmp100-unlock.service /usr/local/sbin/cmp100-unlock /usr/local/bin/cmp100-bench /usr/local/bin/cmp100-pcie-bw /usr/local/bin/cmp100-memclk /etc/modprobe.d/cmp100-unlock.conf
 systemctl daemon-reload
 S=/var/lib/cmp100-unlock
 if [[ -f $S/stock/ucode_load.bin ]]; then

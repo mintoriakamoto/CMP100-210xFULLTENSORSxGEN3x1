@@ -94,6 +94,30 @@ Unchanged from the Gen2 runs (86.9 / 86.6): the Tensor unlock is independent of 
 Locked reference on the same cards: ~512 cycles per dependent HMMA.
 Upstream published: 36.4 cycles, 74-75 TFLOP/s on an 8192^3 GEMM (a different metric).
 
+## HBM memory clock (`CMP100_HBM=877`, opt-in — not yet run on these cards)
+
+The optional HBM stage applies an NVML memory-clock VF offset of `+138`, taking HBM
+from 810 MHz to 877 MHz (~+8% device bandwidth), via the supported
+`nvmlDeviceSetMemClkVfOffset` API. It is reversible (resets on power loss, or
+`cmp100-memclk reset <bdf>`), off by default, and never affects the Tensor/PCIe
+unlock — a failed offset is rolled back and logged as a warning.
+
+Status on this host: **not yet measured.** The lever is ported from the upstream
+projects that report it on `10de:1d84`:
+
+| source | card | stock | offset | result |
+|---|---|---|---|---|
+| Brazzo978/CmpUnlocker-100-210 | 10de:1d84 | 810 MHz | +138 | 877 MHz (HBM 877 profile) |
+| duggasco/CMP100-210 | 10de:1d84 | 810 MHz | +138 | 877.5 MHz, +8.4% bandwidth reported |
+
+Our cards are `10de:1df4`; we have not confirmed the offset takes or the clock
+reaches 877 MHz on them, which is why the stage stays opt-in. When run, the helper
+verifies the offset read-back and the flow logs `HBM 877 MHz PASS` per card; the
+resulting clock is reported for confirmation only (at idle it can read below 877
+until a CUDA context loads). To gather a real before/after here, run
+`cmp100-memclk read <bdf>`, enable `CMP100_HBM=877`, and compare `cmp100-pcie-bw`
+and a memory-bandwidth probe (e.g. a large device-to-device copy) at stock vs 877.
+
 ## Idempotence
 
 Second `systemctl start cmp100-unlock` on an unlocked machine:
