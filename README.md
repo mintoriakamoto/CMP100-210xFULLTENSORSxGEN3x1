@@ -65,6 +65,11 @@ Run `cmp100-bench` (HMMA latency / FP16 throughput) and `cmp100-pcie-bw` (host-d
 copy bandwidth) after install to see the numbers on your card. Both use libcuda
 directly, no CUDA toolkit required.
 
+For getting real **AI inference** throughput out of an unlocked card — the x1-link
+bottleneck, `GGML_CUDA_FORCE_MMQ=ON` (~3x prompt processing), pipeline- vs
+tensor-parallel, KV quant, and the levers that are *not* worth chasing — see
+[docs/AI-PERFORMANCE.md](docs/AI-PERFORMANCE.md).
+
 > **nvidia-smi will always say PCIe gen 2. The link is really Gen3.**
 > The NVIDIA driver re-clamps the *capability* register when it loads and
 > `nvidia-smi` reads that register, so `pcie.link.gen.current` shows 2 (or 1)
@@ -247,6 +252,7 @@ Card in a bad state after a failure: **reboot**. Do not poke sysfs bind/unbind b
     docs/RESULTS.md               boot journal and benchmark output
     docs/REGISTERS.md             BAR0 register map, the PCIe clamp bits, what is CPU-writable
     docs/TROUBLESHOOTING.md       failure messages and what to do
+    docs/AI-PERFORMANCE.md        software/NVML levers for AI throughput (FORCE_MMQ, PP>TP, KV quant)
     CHANGELOG.md                  release notes
     LICENSE                       GPL-2.0
 
